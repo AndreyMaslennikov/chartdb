@@ -8,6 +8,7 @@ import type { DBDependency } from '../../domain/db-dependency';
 import type { DBField } from '../../domain/db-field';
 import type { DBIndex } from '../../domain/db-index';
 import type { DBRelationship } from '../../domain/db-relationship';
+import { isLogicalRelationship } from '../../domain/db-relationship';
 import type { DBTable } from '../../domain/db-table';
 import type { Diagram } from '../../domain/diagram';
 
@@ -660,8 +661,25 @@ export const applyDBMLChanges = ({
     // Step 4: Update index field references
     const finalTables = updateIndexFieldReferences(updatedTables, idMappings);
 
+    // Logical relationships are not part of DBML, so keep the source ones
+    // as long as both of their tables and fields still exist
+    const tableById = new Map(finalTables.map((table) => [table.id, table]));
+    const keptLogicalRelationships = (sourceDiagram.relationships ?? []).filter(
+        (relationship) =>
+            isLogicalRelationship(relationship) &&
+            tableById
+                .get(relationship.sourceTableId)
+                ?.fields.some((f) => f.id === relationship.sourceFieldId) &&
+            tableById
+                .get(relationship.targetTableId)
+                ?.fields.some((f) => f.id === relationship.targetFieldId)
+    );
+
     // Sort relationships to match source order
-    const sortedRelationships = [...updatedRelationships].sort((a, b) => {
+    const sortedRelationships = [
+        ...updatedRelationships,
+        ...keptLogicalRelationships,
+    ].sort((a, b) => {
         // Find source relationships to get their order
         const sourceRelA = sourceDiagram.relationships?.find(
             (r) => r.id === a.id

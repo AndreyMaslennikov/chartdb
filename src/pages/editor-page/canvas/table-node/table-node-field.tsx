@@ -169,6 +169,11 @@ export const TableNodeField: React.FC<TableNodeFieldProps> = React.memo(
 
         const isForeignKey = useMemo(() => {
             return relationships.some((rel) => {
+                // Logical relationships are informational, not foreign keys
+                if (rel.isLogical) {
+                    return false;
+                }
+
                 // FK placement logic:
                 // - FK goes on the "many" side when cardinalities differ
                 // - FK goes on target when cardinalities are the same (one:one, many:many)

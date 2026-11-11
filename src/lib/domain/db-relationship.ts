@@ -12,6 +12,10 @@ export interface DBRelationship {
     sourceCardinality: Cardinality;
     targetCardinality: Cardinality;
     createdAt: number;
+    // Logical (informational) relationship: drawn as a dashed line without
+    // cardinality markers, never exported as a foreign key.
+    isLogical?: boolean | null;
+    comments?: string | null;
 }
 
 export const dbRelationshipSchema: z.ZodType<DBRelationship> = z.object({
@@ -26,6 +30,8 @@ export const dbRelationshipSchema: z.ZodType<DBRelationship> = z.object({
     sourceCardinality: z.union([z.literal('one'), z.literal('many')]),
     targetCardinality: z.union([z.literal('one'), z.literal('many')]),
     createdAt: z.number(),
+    isLogical: z.boolean().or(z.null()).optional(),
+    comments: z.string().or(z.null()).optional(),
 });
 
 export type RelationshipType =
@@ -67,4 +73,29 @@ export const determineCardinalities = (
         case 'many_to_many':
             return { sourceCardinality: 'many', targetCardinality: 'many' };
     }
+};
+
+export const isLogicalRelationship = (
+    relationship: Pick<DBRelationship, 'isLogical'>
+): boolean => !!relationship.isLogical;
+
+/**
+ * Logical relationships are informational only, so they must not take part in
+ * SQL/DBML export or be treated as foreign keys.
+ */
+export const withoutLogicalRelationships = <
+    T extends { relationships?: DBRelationship[] },
+>(
+    diagram: T
+): T => {
+    if (!diagram.relationships?.some(isLogicalRelationship)) {
+        return diagram;
+    }
+
+    return {
+        ...diagram,
+        relationships: diagram.relationships.filter(
+            (relationship) => !isLogicalRelationship(relationship)
+        ),
+    };
 };

@@ -11,7 +11,12 @@ import { useDiff } from '@/context/diff-context/use-diff';
 import { useLocalConfig } from '@/hooks/use-local-config';
 import { useCanvas } from '@/hooks/use-canvas';
 import { EditRelationshipPopover } from './edit-relationship-popover';
-import { EllipsisIcon } from 'lucide-react';
+import { EllipsisIcon, MessageCircleMore } from 'lucide-react';
+import {
+    Tooltip,
+    TooltipContent,
+    TooltipTrigger,
+} from '@/components/tooltip/tooltip';
 
 export type RelationshipEdgeType = Edge<
     {
@@ -48,6 +53,7 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
             } = useCanvas();
 
             const relationship = data?.relationship;
+            const isLogical = !!relationship?.isLogical;
 
             const isPopoverOpen = useMemo(
                 () => editRelationshipPopover?.relationshipId === id,
@@ -89,6 +95,34 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
                     });
                 },
                 [id, openRelationshipPopover]
+            );
+
+            const handleToggleLogical = useCallback(async () => {
+                if (!relationship) return;
+
+                await updateRelationship(
+                    id,
+                    { isLogical: !relationship.isLogical },
+                    { updateHistory: true }
+                );
+            }, [id, relationship, updateRelationship]);
+
+            const handleCommentsChange = useCallback(
+                async (comments: string) => {
+                    if (!relationship) return;
+
+                    const newComments = comments.trim() || null;
+                    if ((relationship.comments ?? null) === newComments) {
+                        return;
+                    }
+
+                    await updateRelationship(
+                        id,
+                        { comments: newComments },
+                        { updateHistory: true }
+                    );
+                },
+                [id, relationship, updateRelationship]
             );
 
             const handleSwitchTables = useCallback(async () => {
@@ -296,7 +330,11 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
                         sourceSide === 'left' ? Position.Left : Position.Right,
                     targetPosition:
                         targetSide === 'left' ? Position.Left : Position.Right,
-                    offset: (edgeNumber + 1 + (showCardinality ? 1.5 : 0)) * 14,
+                    offset:
+                        (edgeNumber +
+                            1 +
+                            (showCardinality && !isLogical ? 1.5 : 0)) *
+                        14,
                 });
                 return path;
             }, [
@@ -310,6 +348,7 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
                 targetSide,
                 edgeNumber,
                 showCardinality,
+                isLogical,
             ]);
 
             const sourceMarker = useMemo(
@@ -377,8 +416,13 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
                     <path
                         id={id}
                         d={edgePath}
-                        markerStart={`url(#${sourceMarker})`}
-                        markerEnd={`url(#${targetMarker})`}
+                        markerStart={
+                            isLogical ? undefined : `url(#${sourceMarker})`
+                        }
+                        markerEnd={
+                            isLogical ? undefined : `url(#${targetMarker})`
+                        }
+                        strokeDasharray={isLogical ? '6 5' : undefined}
                         fill="none"
                         className={cn([
                             'react-flow__edge-path',
@@ -403,6 +447,31 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
                         onClick={handleEdgeClick}
                         onContextMenu={handleContextMenu}
                     />
+                    {isLogical && relationship?.comments && (
+                        <foreignObject
+                            width={24}
+                            height={24}
+                            // keep clear of the edit button shown at the midpoint when selected
+                            x={edgeMidpoint.x - (selected ? 40 : 12)}
+                            y={edgeMidpoint.y - 12}
+                            className="overflow-visible"
+                            style={{ pointerEvents: 'all' }}
+                        >
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <div
+                                        className="flex size-6 cursor-pointer items-center justify-center rounded-full border bg-background text-muted-foreground shadow"
+                                        onClick={handleIndicatorClick}
+                                    >
+                                        <MessageCircleMore size={14} />
+                                    </div>
+                                </TooltipTrigger>
+                                <TooltipContent className="max-w-xs whitespace-pre-wrap break-words">
+                                    {relationship.comments}
+                                </TooltipContent>
+                            </Tooltip>
+                        </foreignObject>
+                    )}
                     {selected && (
                         <foreignObject
                             width={24}
@@ -437,6 +506,10 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
                                 targetCardinality={
                                     relationship.targetCardinality ?? 'one'
                                 }
+                                isLogical={isLogical}
+                                comments={relationship.comments ?? ''}
+                                onToggleLogical={handleToggleLogical}
+                                onCommentsChange={handleCommentsChange}
                                 onCardinalityChange={handleCardinalityChange}
                                 onSwitch={handleSwitchTables}
                                 onDelete={handleDelete}

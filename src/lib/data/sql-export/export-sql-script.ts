@@ -2,6 +2,7 @@ import type { Diagram } from '../../domain/diagram';
 import { OPENAI_API_KEY, OPENAI_API_ENDPOINT, LLM_MODEL_NAME } from '@/lib/env';
 import { DatabaseType } from '@/lib/domain/database-type';
 import type { DBTable } from '@/lib/domain/db-table';
+import { withoutLogicalRelationships } from '@/lib/domain/db-relationship';
 import { dataTypeMap, type DataType } from '../data-types/data-types';
 import { generateCacheKey, getFromCache, setInCache } from './export-sql-cache';
 import { exportMSSQL } from './export-per-type/mssql';
@@ -164,6 +165,9 @@ export const exportBaseSQL = ({
     onlyRelationships?: boolean;
     skipFKGeneration?: boolean;
 }): string => {
+    // Logical relationships are informational only and are not exported
+    diagram = withoutLogicalRelationships(diagram);
+
     const { tables, relationships } = diagram;
 
     if (!tables || tables.length === 0) {
