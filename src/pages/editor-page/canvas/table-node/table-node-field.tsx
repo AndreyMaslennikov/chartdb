@@ -21,6 +21,7 @@ import {
     Pencil,
 } from 'lucide-react';
 import { generateDBFieldSuffix, type DBField } from '@/lib/domain/db-field';
+import type { FieldIndexInfo } from '@/lib/domain/db-index';
 import { useChartDB } from '@/hooks/use-chartdb';
 import { cn } from '@/lib/utils';
 import {
@@ -50,7 +51,26 @@ export interface TableNodeFieldProps {
     isConnectable: boolean;
     // Target edge count passed from canvas to ensure sync with edge creation
     targetEdgeCount?: number;
+    indexes?: FieldIndexInfo[];
 }
+
+const areIndexesEqual = (
+    a: FieldIndexInfo[] = [],
+    b: FieldIndexInfo[] = []
+): boolean =>
+    a === b ||
+    (a.length === b.length &&
+        a.every((item, i) => {
+            const other = b[i];
+            return (
+                item.index.id === other.index.id &&
+                item.index.name === other.index.name &&
+                item.index.unique === other.index.unique &&
+                item.index.type === other.index.type &&
+                item.columnNames.join('\u0000') ===
+                    other.columnNames.join('\u0000')
+            );
+        }));
 
 const arePropsEqual = (
     prevProps: TableNodeFieldProps,
@@ -75,7 +95,8 @@ const arePropsEqual = (
         prevProps.visible === nextProps.visible &&
         prevProps.isConnectable === nextProps.isConnectable &&
         prevProps.tableNodeId === nextProps.tableNodeId &&
-        prevProps.targetEdgeCount === nextProps.targetEdgeCount
+        prevProps.targetEdgeCount === nextProps.targetEdgeCount &&
+        areIndexesEqual(prevProps.indexes, nextProps.indexes)
     );
 };
 
@@ -88,6 +109,7 @@ export const TableNodeField: React.FC<TableNodeFieldProps> = React.memo(
         visible,
         isConnectable,
         targetEdgeCount,
+        indexes,
     }) => {
         const { relationships, readonly, highlightedCustomType, databaseType } =
             useChartDB();
@@ -459,6 +481,39 @@ export const TableNodeField: React.FC<TableNodeFieldProps> = React.memo(
                             </TooltipTrigger>
                             <TooltipContent className="max-w-xs whitespace-pre-wrap break-words">
                                 {field.comments}
+                            </TooltipContent>
+                        </Tooltip>
+                    ) : null}
+
+                    {indexes && indexes.length > 0 ? (
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <div
+                                    className={cn(
+                                        'shrink-0 cursor-pointer rounded border px-1 text-[10px] font-medium leading-4 tracking-wide',
+                                        indexes.some((i) => i.index.unique)
+                                            ? 'border-sky-300 text-sky-700 dark:border-sky-700 dark:text-sky-300'
+                                            : 'border-border text-muted-foreground'
+                                    )}
+                                >
+                                    {indexes.some((i) => i.index.unique)
+                                        ? 'UNIQ'
+                                        : 'IDX'}
+                                </div>
+                            </TooltipTrigger>
+                            <TooltipContent className="max-w-xs break-words">
+                                {indexes.map(({ index, columnNames }) => (
+                                    <div key={index.id}>
+                                        <span className="font-semibold">
+                                            {index.name || 'unnamed index'}
+                                        </span>
+                                        {index.unique ? ' · unique' : ''}
+                                        {index.type ? ` · ${index.type}` : ''}
+                                        {columnNames.length > 1
+                                            ? ` (${columnNames.join(', ')})`
+                                            : ''}
+                                    </div>
+                                ))}
                             </TooltipContent>
                         </Tooltip>
                     ) : null}
