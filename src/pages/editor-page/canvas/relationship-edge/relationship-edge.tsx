@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Edge, EdgeProps } from '@xyflow/react';
 import { getSmoothStepPath, Position, useReactFlow } from '@xyflow/react';
@@ -11,6 +11,13 @@ import { useDiff } from '@/context/diff-context/use-diff';
 import { useLocalConfig } from '@/hooks/use-local-config';
 import { useCanvas } from '@/hooks/use-canvas';
 import { EditRelationshipPopover } from './edit-relationship-popover';
+import type { RoutePoint } from '@/lib/utils/route-utils';
+import {
+    buildRoutePoints,
+    getRouteMidpoint,
+    insertWaypoint,
+    pointsToRoundedPath,
+} from '@/lib/utils/route-utils';
 import { EllipsisIcon, MessageCircleMore } from 'lucide-react';
 import {
     Tooltip,
@@ -39,7 +46,8 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
             selected,
             data,
         }) => {
-            const { getInternalNode, getEdge } = useReactFlow();
+            const { getInternalNode, getEdge, screenToFlowPosition } =
+                useReactFlow();
             const { checkIfRelationshipRemoved, checkIfNewRelationship } =
                 useDiff();
             const { showCardinality } = useLocalConfig();
@@ -54,6 +62,21 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
 
             const relationship = data?.relationship;
             const isLogical = !!relationship?.isLogical;
+
+            // Manual route. While a waypoint is
+            // dragged the local copy is used, the result is saved on release.
+            const savedWaypoints = useMemo(
+                () => relationship?.waypoints ?? [],
+                [relationship?.waypoints]
+            );
+            const [dragWaypoints, setDragWaypoints] = useState<
+                RoutePoint[] | null
+            >(null);
+            const waypoints = dragWaypoints ?? savedWaypoints;
+
+            useEffect(() => {
+                setDragWaypoints(null);
+            }, [relationship?.waypoints]);
 
             const isPopoverOpen = useMemo(
                 () => editRelationshipPopover?.relationshipId === id,
@@ -309,8 +332,40 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
                 }
             }, [sourceLeftX, sourceRightX, targetLeftX, targetRightX]);
 
+            // Edge endpoints (same ones the automatic route uses)
+            const routeStart: RoutePoint = useMemo(
+                () => ({
+                    x: Math.round(
+                        sourceSide === 'left' ? sourceLeftX : sourceRightX
+                    ),
+                    y: Math.round(sourceY),
+                }),
+                [sourceSide, sourceLeftX, sourceRightX, sourceY]
+            );
+            const routeEnd: RoutePoint = useMemo(
+                () => ({
+                    x: Math.round(
+                        targetSide === 'left' ? targetLeftX : targetRightX
+                    ),
+                    y: Math.round(targetY),
+                }),
+                [targetSide, targetLeftX, targetRightX, targetY]
+            );
+
+            const routePoints = useMemo(
+                () =>
+                    waypoints.length > 0
+                        ? buildRoutePoints(routeStart, waypoints, routeEnd)
+                        : null,
+                [waypoints, routeStart, routeEnd]
+            );
+
             const edgePath = useMemo(() => {
                 // Round values to prevent tiny changes from triggering recalculation
+                if (routePoints) {
+                    return pointsToRoundedPath(routePoints, 14);
+                }
+
                 const roundedSourceX = Math.round(
                     sourceSide === 'left' ? sourceLeftX : sourceRightX
                 );
@@ -349,6 +404,7 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
                 edgeNumber,
                 showCardinality,
                 isLogical,
+                routePoints,
             ]);
 
             const sourceMarker = useMemo(
@@ -392,6 +448,10 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
 
             // Calculate the midpoint of the edge for the indicator
             const edgeMidpoint = useMemo(() => {
+                if (routePoints) {
+                    return getRouteMidpoint(routePoints);
+                }
+
                 const sourceXPos =
                     sourceSide === 'left' ? sourceLeftX : sourceRightX;
                 const targetXPos =
@@ -409,7 +469,90 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
                 targetRightX,
                 sourceY,
                 targetY,
+                routePoints,
             ]);
+
+            const saveWaypoints = useCallback(
+                (newWaypoints: RoutePoint[]) =>
+                    updateRelationship(
+                        id,
+                        {
+                            waypoints:
+                                newWaypoints.length > 0 ? newWaypoints : null,
+                        },
+                        { updateHistory: true }
+                    ),
+                [id, updateRelationship]
+            );
+
+            const handleAddBend = useCallback(() => {
+                saveWaypoints(insertWaypoint(routeStart, waypoints, routeEnd));
+                closeRelationshipPopover();
+            }, [
+                saveWaypoints,
+                routeStart,
+                routeEnd,
+                waypoints,
+                closeRelationshipPopover,
+            ]);
+
+            const handleResetRoute = useCallback(() => {
+                saveWaypoints([]);
+                closeRelationshipPopover();
+            }, [saveWaypoints, closeRelationshipPopover]);
+
+            const handleWaypointPointerDown = useCallback(
+                (index: number, e: React.PointerEvent<SVGCircleElement>) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+
+                    const handle = e.currentTarget;
+                    const pointerId = e.pointerId;
+                    handle.setPointerCapture(pointerId);
+
+                    let latest = waypoints;
+
+                    const onMove = (event: PointerEvent) => {
+                        const point = screenToFlowPosition({
+                            x: event.clientX,
+                            y: event.clientY,
+                        });
+                        latest = waypoints.map((waypoint, i) =>
+                            i === index
+                                ? {
+                                      x: Math.round(point.x),
+                                      y: Math.round(point.y),
+                                  }
+                                : waypoint
+                        );
+                        setDragWaypoints(latest);
+                    };
+
+                    const onUp = () => {
+                        handle.removeEventListener('pointermove', onMove);
+                        handle.removeEventListener('pointerup', onUp);
+                        handle.releasePointerCapture(pointerId);
+
+                        if (latest === waypoints) {
+                            setDragWaypoints(null);
+                            return;
+                        }
+                        saveWaypoints(latest);
+                    };
+
+                    handle.addEventListener('pointermove', onMove);
+                    handle.addEventListener('pointerup', onUp);
+                },
+                [waypoints, screenToFlowPosition, saveWaypoints]
+            );
+
+            const handleWaypointRemove = useCallback(
+                (index: number, e: React.MouseEvent) => {
+                    e.stopPropagation();
+                    saveWaypoints(waypoints.filter((_, i) => i !== index));
+                },
+                [waypoints, saveWaypoints]
+            );
 
             return (
                 <>
@@ -447,6 +590,30 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
                         onClick={handleEdgeClick}
                         onContextMenu={handleContextMenu}
                     />
+                    {selected &&
+                        waypoints.map((waypoint, index) => (
+                            <circle
+                                key={index}
+                                cx={waypoint.x}
+                                cy={waypoint.y}
+                                r={8}
+                                strokeWidth={3}
+                                // eslint-disable-next-line tailwindcss/no-custom-classname
+                                className="nodrag nopan cursor-move fill-pink-600 stroke-white"
+                                style={{ pointerEvents: 'all' }}
+                                onPointerDown={(e) =>
+                                    handleWaypointPointerDown(index, e)
+                                }
+                                onDoubleClick={(e) =>
+                                    handleWaypointRemove(index, e)
+                                }
+                            >
+                                <title>
+                                    Drag to move the bend, double-click to
+                                    remove it
+                                </title>
+                            </circle>
+                        ))}
                     {isLogical && relationship?.comments && (
                         <foreignObject
                             width={24}
@@ -509,6 +676,9 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
                                 isLogical={isLogical}
                                 comments={relationship.comments ?? ''}
                                 onToggleLogical={handleToggleLogical}
+                                hasWaypoints={waypoints.length > 0}
+                                onAddBend={handleAddBend}
+                                onResetRoute={handleResetRoute}
                                 onCommentsChange={handleCommentsChange}
                                 onCardinalityChange={handleCardinalityChange}
                                 onSwitch={handleSwitchTables}
