@@ -1,5 +1,6 @@
-import React, { useCallback, useRef } from 'react';
-import { Trash2, ArrowLeftRight, CircleDotDashed } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Trash2, ArrowLeftRight, CircleDotDashed, Link2 } from 'lucide-react';
+import { Input } from '@/components/input/input';
 import { Button } from '@/components/button/button';
 import type { Cardinality } from '@/lib/domain/db-relationship';
 import { cn } from '@/lib/utils';
@@ -12,6 +13,10 @@ export interface EditRelationshipPopoverProps {
     relationshipId: string;
     sourceCardinality: Cardinality;
     targetCardinality: Cardinality;
+    isLogical: boolean;
+    comments: string;
+    onToggleLogical: () => void;
+    onCommentsChange: (comments: string) => void;
     onCardinalityChange: (
         sourceCardinality: Cardinality,
         targetCardinality: Cardinality
@@ -38,6 +43,10 @@ export const EditRelationshipPopover: React.FC<
     relationshipId,
     sourceCardinality,
     targetCardinality,
+    isLogical,
+    comments,
+    onToggleLogical,
+    onCommentsChange,
     onCardinalityChange,
     onSwitch,
     onDelete,
@@ -46,7 +55,21 @@ export const EditRelationshipPopover: React.FC<
     const { closeRelationshipPopover } = useCanvas();
     const { selectSidebarSection, openRelationshipFromSidebar } = useLayout();
 
-    useClickAway(popoverRef, closeRelationshipPopover);
+    const [commentsDraft, setCommentsDraft] = useState(comments);
+    const commentsDraftRef = useRef(commentsDraft);
+    commentsDraftRef.current = commentsDraft;
+
+    useEffect(() => {
+        setCommentsDraft(comments);
+    }, [comments]);
+
+    // Persist an unsaved comment when the popover is closed by clicking away
+    useClickAway(popoverRef, () => {
+        if (isLogical) {
+            onCommentsChange(commentsDraftRef.current);
+        }
+        closeRelationshipPopover();
+    });
 
     const openRelationshipInSidebar = useCallback(() => {
         selectSidebarSection('refs');
@@ -69,7 +92,7 @@ export const EditRelationshipPopover: React.FC<
             }}
         >
             <div className="flex items-center gap-1">
-                {relationshipTypes.map((type) => {
+                {(isLogical ? [] : relationshipTypes).map((type) => {
                     const isActive =
                         type.sourceCardinality === sourceCardinality &&
                         type.targetCardinality === targetCardinality;
@@ -96,20 +119,43 @@ export const EditRelationshipPopover: React.FC<
                         </Button>
                     );
                 })}
-                <div className="mx-1 h-6 w-px bg-slate-300" />
+                {isLogical ? null : (
+                    <div className="mx-1 h-6 w-px bg-slate-300" />
+                )}
                 <Button
-                    variant="ghost"
+                    variant={isLogical ? 'default' : 'ghost'}
                     size="sm"
-                    className="size-7 p-0 text-sky-600 hover:bg-sky-50 hover:text-sky-700"
+                    className={cn(
+                        'h-7 gap-1 px-2 text-xs',
+                        isLogical
+                            ? 'bg-slate-700 text-white hover:bg-slate-600'
+                            : 'text-slate-600 hover:bg-slate-100 hover:text-slate-800'
+                    )}
                     onClick={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        onSwitch();
+                        onToggleLogical();
                     }}
-                    title="Switch tables"
+                    title="Logical relationship: informational dashed line, not a foreign key"
                 >
-                    <ArrowLeftRight className="!size-3.5" />
+                    <Link2 className="!size-4" />
+                    Logical
                 </Button>
+                {isLogical ? null : (
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        className="size-7 p-0 text-sky-600 hover:bg-sky-50 hover:text-sky-700"
+                        onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onSwitch();
+                        }}
+                        title="Switch tables"
+                    >
+                        <ArrowLeftRight className="!size-3.5" />
+                    </Button>
+                )}
                 <Button
                     variant="ghost"
                     size="sm"
@@ -133,6 +179,22 @@ export const EditRelationshipPopover: React.FC<
                     <Trash2 className="!size-3.5" />
                 </Button>
             </div>
+            {isLogical ? (
+                <Input
+                    className="mt-2 h-8 text-xs"
+                    placeholder="Comment (e.g. API endpoint)"
+                    value={commentsDraft}
+                    onChange={(e) => setCommentsDraft(e.target.value)}
+                    onBlur={() => onCommentsChange(commentsDraft)}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                            onCommentsChange(commentsDraft);
+                            closeRelationshipPopover();
+                        }
+                        e.stopPropagation();
+                    }}
+                />
+            ) : null}
         </div>
     );
 };

@@ -1,4 +1,5 @@
 import { Button } from '@/components/button/button';
+import { Input } from '@/components/input/input';
 import {
     Select,
     SelectContent,
@@ -26,7 +27,7 @@ import {
     ChevronsLeftRightEllipsis,
     ArrowLeftRight,
 } from 'lucide-react';
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 export interface RelationshipListItemContentProps {
@@ -108,6 +109,26 @@ export const RelationshipListItemContent: React.FC<
         }
     }, [relationship, updateRelationship]);
 
+    const [commentsDraft, setCommentsDraft] = useState(
+        relationship.comments ?? ''
+    );
+
+    useEffect(() => {
+        setCommentsDraft(relationship.comments ?? '');
+    }, [relationship.comments]);
+
+    const saveComments = useCallback(() => {
+        const newComments = commentsDraft.trim() || null;
+        if ((relationship.comments ?? null) !== newComments) {
+            updateRelationship(relationship.id, { comments: newComments });
+        }
+    }, [
+        commentsDraft,
+        relationship.comments,
+        relationship.id,
+        updateRelationship,
+    ]);
+
     const targetTable = getTable(relationship.targetTableId);
     const targetField = getField(
         relationship.targetTableId,
@@ -184,57 +205,78 @@ export const RelationshipListItemContent: React.FC<
                         </Tooltip>
                     </div>
                 </div>
-                <div className="flex flex-col gap-2 text-xs">
-                    <div className="flex flex-row items-center justify-between">
-                        <div className="flex flex-row items-center gap-1">
-                            <ChevronsLeftRightEllipsis className="size-4 text-subtitle" />
-                            <div className="font-bold text-subtitle">
-                                {t(
-                                    'side_panel.refs_section.relationship.cardinality'
-                                )}
-                            </div>
+                {relationship.isLogical ? (
+                    <div className="flex flex-col gap-2 text-xs">
+                        <div className="font-bold text-subtitle">
+                            Logical relationship
                         </div>
-                        {!readonly && (
-                            <Tooltip>
-                                <TooltipTrigger asChild>
-                                    <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        className="size-7 p-0 text-sky-600 hover:bg-sky-50 hover:text-sky-700"
-                                        onClick={handleSwitchTables}
-                                    >
-                                        <ArrowLeftRight className="!size-3.5" />
-                                    </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                    {t(
-                                        'side_panel.refs_section.relationship.switch_tables'
-                                    )}
-                                </TooltipContent>
-                            </Tooltip>
-                        )}
+                        <Input
+                            className="h-8 text-xs"
+                            placeholder="Comment (e.g. API endpoint)"
+                            value={commentsDraft}
+                            disabled={readonly}
+                            onChange={(e) => setCommentsDraft(e.target.value)}
+                            onBlur={saveComments}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    saveComments();
+                                }
+                            }}
+                        />
                     </div>
+                ) : (
+                    <div className="flex flex-col gap-2 text-xs">
+                        <div className="flex flex-row items-center justify-between">
+                            <div className="flex flex-row items-center gap-1">
+                                <ChevronsLeftRightEllipsis className="size-4 text-subtitle" />
+                                <div className="font-bold text-subtitle">
+                                    {t(
+                                        'side_panel.refs_section.relationship.cardinality'
+                                    )}
+                                </div>
+                            </div>
+                            {!readonly && (
+                                <Tooltip>
+                                    <TooltipTrigger asChild>
+                                        <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            className="size-7 p-0 text-sky-600 hover:bg-sky-50 hover:text-sky-700"
+                                            onClick={handleSwitchTables}
+                                        >
+                                            <ArrowLeftRight className="!size-3.5" />
+                                        </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                        {t(
+                                            'side_panel.refs_section.relationship.switch_tables'
+                                        )}
+                                    </TooltipContent>
+                                </Tooltip>
+                            )}
+                        </div>
 
-                    <Select
-                        value={relationshipType}
-                        onValueChange={updateCardinalities}
-                        disabled={readonly}
-                    >
-                        <SelectTrigger className="h-8">
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectGroup>
-                                <SelectItem value="one_to_one">
-                                    {t('relationship_type.one_to_one')}
-                                </SelectItem>
-                                <SelectItem value="one_to_many">
-                                    {t('relationship_type.one_to_many')}
-                                </SelectItem>
-                            </SelectGroup>
-                        </SelectContent>
-                    </Select>
-                </div>
+                        <Select
+                            value={relationshipType}
+                            onValueChange={updateCardinalities}
+                            disabled={readonly}
+                        >
+                            <SelectTrigger className="h-8">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectGroup>
+                                    <SelectItem value="one_to_one">
+                                        {t('relationship_type.one_to_one')}
+                                    </SelectItem>
+                                    <SelectItem value="one_to_many">
+                                        {t('relationship_type.one_to_many')}
+                                    </SelectItem>
+                                </SelectGroup>
+                            </SelectContent>
+                        </Select>
+                    </div>
+                )}
             </div>
             {!readonly ? (
                 <div className="flex flex-1 items-center justify-center pt-2">

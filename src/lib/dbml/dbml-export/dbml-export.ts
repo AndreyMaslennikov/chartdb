@@ -7,6 +7,7 @@ import type { DBCustomType } from '@/lib/domain/db-custom-type';
 import { DBCustomTypeKind } from '@/lib/domain/db-custom-type';
 import { validateCheckConstraint } from '@/lib/check-constraints/check-constraints-validator';
 import type { DBRelationship } from '@/lib/domain/db-relationship';
+import { withoutLogicalRelationships } from '@/lib/domain/db-relationship';
 
 // Use DBCustomType for generating Enum DBML
 const generateEnumsDBML = (customTypes: DBCustomType[] | undefined): string => {
@@ -1363,6 +1364,9 @@ export interface DBMLExportResult {
 }
 
 export function generateDBMLFromDiagram(diagram: Diagram): DBMLExportResult {
+    // Logical relationships are informational only and are not exported
+    diagram = withoutLogicalRelationships(diagram);
+
     // Filter out fields with empty names
     const sanitizedTables =
         diagram.tables?.map((table) => {
