@@ -16,6 +16,8 @@ export interface DBRelationship {
     // cardinality markers, never exported as a foreign key.
     isLogical?: boolean | null;
     comments?: string | null;
+    // Manual route of the line (absolute canvas coordinates)
+    waypoints?: { x: number; y: number }[] | null;
 }
 
 export const dbRelationshipSchema: z.ZodType<DBRelationship> = z.object({
@@ -32,6 +34,10 @@ export const dbRelationshipSchema: z.ZodType<DBRelationship> = z.object({
     createdAt: z.number(),
     isLogical: z.boolean().or(z.null()).optional(),
     comments: z.string().or(z.null()).optional(),
+    waypoints: z
+        .array(z.object({ x: z.number(), y: z.number() }))
+        .or(z.null())
+        .optional(),
 });
 
 export type RelationshipType =

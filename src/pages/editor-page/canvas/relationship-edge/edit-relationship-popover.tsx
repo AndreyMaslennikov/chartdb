@@ -1,5 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Trash2, ArrowLeftRight, CircleDotDashed, Link2 } from 'lucide-react';
+import {
+    Trash2,
+    ArrowLeftRight,
+    CircleDotDashed,
+    Link2,
+    Plus,
+    RotateCcw,
+} from 'lucide-react';
 import { Input } from '@/components/input/input';
 import { Button } from '@/components/button/button';
 import type { Cardinality } from '@/lib/domain/db-relationship';
@@ -16,6 +23,9 @@ export interface EditRelationshipPopoverProps {
     isLogical: boolean;
     comments: string;
     onToggleLogical: () => void;
+    hasWaypoints: boolean;
+    onAddBend: () => void;
+    onResetRoute: () => void;
     onCommentsChange: (comments: string) => void;
     onCardinalityChange: (
         sourceCardinality: Cardinality,
@@ -46,6 +56,9 @@ export const EditRelationshipPopover: React.FC<
     isLogical,
     comments,
     onToggleLogical,
+    hasWaypoints,
+    onAddBend,
+    onResetRoute,
     onCommentsChange,
     onCardinalityChange,
     onSwitch,
@@ -178,6 +191,38 @@ export const EditRelationshipPopover: React.FC<
                 >
                     <Trash2 className="!size-3.5" />
                 </Button>
+            </div>
+            <div className="mt-2 flex items-center gap-1">
+                <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 gap-1 px-2 text-xs"
+                    onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onAddBend();
+                    }}
+                    title="Add a draggable bend to route the line manually"
+                >
+                    <Plus className="!size-3.5" />
+                    Add bend
+                </Button>
+                {hasWaypoints ? (
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 gap-1 px-2 text-xs"
+                        onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onResetRoute();
+                        }}
+                        title="Remove all bends and route the line automatically"
+                    >
+                        <RotateCcw className="!size-3.5" />
+                        Reset route
+                    </Button>
+                ) : null}
             </div>
             {isLogical ? (
                 <Input
