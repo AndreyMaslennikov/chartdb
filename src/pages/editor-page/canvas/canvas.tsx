@@ -111,6 +111,8 @@ import { ConnectionLine } from './connection-line/connection-line';
 import {
     updateTablesParentAreas,
     getTablesInArea,
+    getNotesInArea,
+    updateNotesParentAreas,
 } from '@/lib/utils/area-utils';
 import { CanvasFilter } from './canvas-filter/canvas-filter';
 import { useHotkeys } from 'react-hotkeys-hook';
@@ -254,7 +256,10 @@ const areaToAreaNode = (
     };
 };
 
-const noteToNoteNode = (note: Note): NoteNodeType => {
+const noteToNoteNode = (
+    note: Note,
+    { hidden }: { hidden: boolean }
+): NoteNodeType => {
     return {
         id: note.id,
         type: 'note',
@@ -266,6 +271,7 @@ const noteToNoteNode = (note: Note): NoteNodeType => {
         style: {
             zIndex: 50,
         },
+        hidden,
     };
 };
 
@@ -593,6 +599,18 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
                 (targetEdgeCountsByField[fieldId] || 0) + 1;
         });
 
+        const areaNodes = areas.map((area) =>
+            areaToAreaNode(area, {
+                tables,
+                filter,
+                databaseType,
+                filterLoading,
+            })
+        );
+        const hiddenAreaIds = new Set(
+            areaNodes.filter((node) => node.hidden).map((node) => node.id)
+        );
+
         setNodes((prevNodes) => {
             const newNodes = [
                 ...tables.map((table) => {
@@ -637,15 +655,15 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
                         },
                     };
                 }),
-                ...areas.map((area) =>
-                    areaToAreaNode(area, {
-                        tables,
-                        filter,
-                        databaseType,
-                        filterLoading,
+                ...areaNodes,
+                ...notes.map((note) =>
+                    noteToNoteNode(note, {
+                        // Notes glued to a hidden area are hidden with it
+                        hidden:
+                            !!note.parentAreaId &&
+                            hiddenAreaIds.has(note.parentAreaId),
                     })
                 ),
-                ...notes.map((note) => noteToNoteNode(note)),
                 ...prevNodes.filter(
                     (n) =>
                         n.type === 'temp-cursor' ||
@@ -797,6 +815,40 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
 
         checkParentAreas();
     }, [nodes, updateTablesState]);
+
+    // Keep notes' parentAreaId in sync with their geometric containment
+    useEffect(() => {
+        const checkNotesParentAreas = debounce(() => {
+            const visibleNotes = nodes
+                .filter((node) => node.type === 'note' && !node.hidden)
+                .map((node) => (node as NoteNodeType).data.note);
+            const visibleAreas = nodes
+                .filter((node) => node.type === 'area' && !node.hidden)
+                .map((node) => (node as AreaNodeType).data.area);
+
+            const updatedNotes = updateNotesParentAreas(
+                visibleNotes,
+                visibleAreas
+            );
+
+            updatedNotes.forEach((newNote, index) => {
+                const oldNote = visibleNotes[index];
+                if (
+                    oldNote &&
+                    (newNote.parentAreaId ?? null) !==
+                        (oldNote.parentAreaId ?? null)
+                ) {
+                    updateNote(
+                        newNote.id,
+                        { parentAreaId: newNote.parentAreaId ?? null },
+                        { updateHistory: false }
+                    );
+                }
+            });
+        }, 300);
+
+        checkNotesParentAreas();
+    }, [nodes, updateNote]);
 
     const onConnectHandler = useCallback(
         async (params: AddEdgeParams) => {
@@ -1072,6 +1124,19 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
                                 dragging: true,
                             });
                         });
+
+                        // Glued notes follow the area as well
+                        getNotesInArea(areaChange.id, notes).forEach((note) => {
+                            additionalChanges.push({
+                                id: note.id,
+                                type: 'position',
+                                position: {
+                                    x: note.x + deltaX,
+                                    y: note.y + deltaY,
+                                },
+                                dragging: true,
+                            });
+                        });
                     }
                 });
 
@@ -1121,6 +1186,35 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
                             );
                             childTables.forEach((table) => {
                                 childTableMovements.set(table.id, {
+                                    deltaX,
+                                    deltaY,
+                                });
+                            });
+                        }
+                    }
+                });
+            }
+
+            // Calculate glued note movements from area position changes
+            const childNoteMovements: Map<
+                string,
+                { deltaX: number; deltaY: number }
+            > = new Map();
+            if (
+                areaPositionChanges.length > 0 &&
+                areaSizeChanges.length === 0
+            ) {
+                areaPositionChanges.forEach((change) => {
+                    if (change.type === 'position' && change.position) {
+                        const currentArea = areas.find(
+                            (a) => a.id === change.id
+                        );
+                        if (currentArea) {
+                            const deltaX = change.position.x - currentArea.x;
+                            const deltaY = change.position.y - currentArea.y;
+
+                            getNotesInArea(change.id, notes).forEach((note) => {
+                                childNoteMovements.set(note.id, {
                                     deltaX,
                                     deltaY,
                                 });
@@ -1262,6 +1356,15 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
 
                 // Handle area removal (child tables parentAreaId already cleared above)
                 areaRemoveChanges.forEach((change) => {
+                    notes
+                        .filter((note) => note.parentAreaId === change.id)
+                        .forEach((note) =>
+                            updateNote(
+                                note.id,
+                                { parentAreaId: null },
+                                { updateHistory: false }
+                            )
+                        );
                     removeArea(change.id);
                     delete areasUpdates[change.id];
                 });
@@ -1278,7 +1381,8 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
             if (
                 notePositionChanges.length > 0 ||
                 noteRemoveChanges.length > 0 ||
-                noteSizeChanges.length > 0
+                noteSizeChanges.length > 0 ||
+                childNoteMovements.size > 0
             ) {
                 const notesUpdates: Record<string, Partial<Note>> = {};
                 // Handle note position changes
@@ -1288,6 +1392,20 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
                             ...notesUpdates[change.id],
                             x: change.position.x,
                             y: change.position.y,
+                        };
+                    }
+                });
+
+                // Handle note movement caused by dragging the parent area
+                childNoteMovements.forEach(({ deltaX, deltaY }, noteId) => {
+                    if (notesUpdates[noteId]) {
+                        return;
+                    }
+                    const note = notes.find((n) => n.id === noteId);
+                    if (note) {
+                        notesUpdates[noteId] = {
+                            x: note.x + deltaX,
+                            y: note.y + deltaY,
                         };
                     }
                 });
@@ -1330,6 +1448,7 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
             removeNote,
             readonly,
             tables,
+            notes,
             areas,
             getNode,
         ]

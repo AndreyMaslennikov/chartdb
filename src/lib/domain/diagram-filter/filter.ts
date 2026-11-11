@@ -124,8 +124,14 @@ export const applyFilterOnDiagram = ({
         filteredTables?.some((table) => table.parentAreaId === area.id)
     );
 
+    const keptAreaIds = new Set(filteredAreas?.map((area) => area.id));
+    const filteredNotes = diagram.notes?.filter(
+        (note) => !note.parentAreaId || keptAreaIds.has(note.parentAreaId)
+    );
+
     return {
         ...diagram,
+        notes: filteredNotes,
         tables: filteredTables,
         relationships: filteredRelationships,
         dependencies: filteredDependencies,

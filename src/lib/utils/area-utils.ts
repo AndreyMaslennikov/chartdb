@@ -1,6 +1,7 @@
 import type { DBTable } from '@/lib/domain/db-table';
 import type { DBRelationship } from '@/lib/domain/db-relationship';
 import type { Area } from '@/lib/domain/area';
+import type { Note } from '@/lib/domain/note';
 import {
     adjustTablePositionsWithoutAreas,
     calcTableHeight,
@@ -79,6 +80,51 @@ export const updateTablesParentAreas = (
         return table;
     });
 };
+
+/**
+ * Check if a note is completely inside an area
+ */
+export const isNoteInsideArea = (note: Note, area: Area): boolean =>
+    note.x >= area.x &&
+    note.x + note.width <= area.x + area.width &&
+    note.y >= area.y &&
+    note.y + note.height <= area.y + area.height;
+
+/**
+ * Find which area contains a note (top-most area by order wins,
+ * same priority rule as for tables)
+ */
+export const findContainingAreaForNote = (
+    note: Note,
+    areas: Area[]
+): Area | null => {
+    const sortedAreas = [...areas].sort(
+        (a, b) => (b.order ?? 0) - (a.order ?? 0)
+    );
+
+    return sortedAreas.find((area) => isNoteInsideArea(note, area)) ?? null;
+};
+
+/**
+ * Update notes with their parent area IDs based on containment
+ */
+export const updateNotesParentAreas = (notes: Note[], areas: Area[]): Note[] =>
+    notes.map((note) => {
+        const newParentAreaId =
+            findContainingAreaForNote(note, areas)?.id ?? null;
+
+        if ((note.parentAreaId ?? null) !== newParentAreaId) {
+            return { ...note, parentAreaId: newParentAreaId };
+        }
+
+        return note;
+    });
+
+/**
+ * Get all notes that are glued to a specific area
+ */
+export const getNotesInArea = (areaId: string, notes: Note[]): Note[] =>
+    notes.filter((note) => note.parentAreaId === areaId);
 
 /**
  * Get all tables that are inside a specific area
