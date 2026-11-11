@@ -152,3 +152,50 @@ export const getTableIndexesWithPrimaryKey = ({
         ? [primaryKeyIndex, ...indexesWithoutPKIndex]
         : indexesWithoutPKIndex;
 };
+
+export interface FieldIndexInfo {
+    index: DBIndex;
+    // Names of all columns of the index (in index order), for composite indexes
+    columnNames: string[];
+}
+
+const NO_FIELD_INDEXES: FieldIndexInfo[] = [];
+
+/**
+ * Maps a field id to the (non primary key) indexes that include this field.
+ * Primary key indexes are skipped since they are already marked on the field.
+ */
+export const getFieldIndexesMap = ({
+    table,
+}: {
+    table: DBTable;
+}): Map<string, FieldIndexInfo[]> => {
+    const fieldNameById = new Map(table.fields.map((f) => [f.id, f.name]));
+    const result = new Map<string, FieldIndexInfo[]>();
+
+    for (const index of table.indexes ?? []) {
+        if (index.isPrimaryKey) {
+            continue;
+        }
+
+        const columnNames = index.fieldIds
+            .map((fieldId) => fieldNameById.get(fieldId))
+            .filter((name): name is string => !!name);
+
+        for (const fieldId of index.fieldIds) {
+            if (!fieldNameById.has(fieldId)) {
+                continue;
+            }
+            const list = result.get(fieldId) ?? [];
+            list.push({ index, columnNames });
+            result.set(fieldId, list);
+        }
+    }
+
+    return result;
+};
+
+export const getFieldIndexes = (
+    map: Map<string, FieldIndexInfo[]>,
+    fieldId: string
+): FieldIndexInfo[] => map.get(fieldId) ?? NO_FIELD_INDEXES;

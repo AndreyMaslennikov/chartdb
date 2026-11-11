@@ -39,6 +39,7 @@ import { useLayout } from '@/hooks/use-layout';
 import { useChartDB } from '@/hooks/use-chartdb';
 import type { RelationshipEdgeType } from '../relationship-edge/relationship-edge';
 import type { DBField } from '@/lib/domain/db-field';
+import { getFieldIndexes, getFieldIndexesMap } from '@/lib/domain/db-index';
 import { useTranslation } from 'react-i18next';
 import { TableNodeContextMenu } from './table-node-context-menu';
 import { cn } from '@/lib/utils';
@@ -136,6 +137,11 @@ export const TableNode: React.FC<NodeProps<TableNodeType>> = React.memo(
         } = useDiff();
 
         const fields = useMemo(() => table.fields, [table.fields]);
+        const fieldIndexesMap = useMemo(
+            () => getFieldIndexesMap({ table }),
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+            [table.fields, table.indexes]
+        );
 
         // Effect to manage field count when entering/exiting edit mode
         useEffect(() => {
@@ -624,6 +630,10 @@ export const TableNode: React.FC<NodeProps<TableNodeType>> = React.memo(
                                 visible={true}
                                 isConnectable={!table.isView}
                                 targetEdgeCount={targetEdgeCounts?.[field.id]}
+                                indexes={getFieldIndexes(
+                                    fieldIndexesMap,
+                                    field.id
+                                )}
                             />
                         ))}
                     </div>
