@@ -22,6 +22,7 @@ import { EllipsisIcon, MessageCircleMore } from 'lucide-react';
 import {
     Tooltip,
     TooltipContent,
+    TooltipPortal,
     TooltipTrigger,
 } from '@/components/tooltip/tooltip';
 
@@ -633,9 +634,14 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
                                         <MessageCircleMore size={14} />
                                     </div>
                                 </TooltipTrigger>
-                                <TooltipContent className="max-w-xs whitespace-pre-wrap break-words">
-                                    {relationship.comments}
-                                </TooltipContent>
+                                <TooltipPortal>
+                                    <TooltipContent
+                                        side="top"
+                                        className="max-w-xs whitespace-pre-wrap break-words"
+                                    >
+                                        {relationship.comments}
+                                    </TooltipContent>
+                                </TooltipPortal>
                             </Tooltip>
                         </foreignObject>
                     )}
