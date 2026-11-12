@@ -5,7 +5,10 @@ import { DatabaseType } from '@/lib/domain/database-type';
 import type { DBField } from '@/lib/domain/db-field';
 import type { DBIndex } from '@/lib/domain/db-index';
 import type { DBCheckConstraint } from '@/lib/domain/db-check-constraint';
-import type { DBRelationship } from '@/lib/domain/db-relationship';
+import type {
+    DBRelationship,
+    RelationshipSide,
+} from '@/lib/domain/db-relationship';
 import type { Diagram } from '@/lib/domain/diagram';
 import type { DatabaseEdition } from '@/lib/domain/database-edition';
 import type { DBSchema } from '@/lib/domain/db-schema';
@@ -200,6 +203,8 @@ export interface ChartDBContext {
         targetTableId: string;
         sourceFieldId: string;
         targetFieldId: string;
+        sourceSide?: RelationshipSide | null;
+        targetSide?: RelationshipSide | null;
     }) => Promise<DBRelationship>;
     addRelationship: (
         relationship: DBRelationship,

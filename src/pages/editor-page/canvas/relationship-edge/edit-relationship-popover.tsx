@@ -202,10 +202,10 @@ export const EditRelationshipPopover: React.FC<
                         e.stopPropagation();
                         onAddBend();
                     }}
-                    title="Add a draggable bend to route the line manually"
+                    title="Add two bends (or double-click the line). Drag segments to move them"
                 >
                     <Plus className="!size-3.5" />
-                    Add bend
+                    Add bends
                 </Button>
                 {hasWaypoints ? (
                     <Button
@@ -217,7 +217,7 @@ export const EditRelationshipPopover: React.FC<
                             e.stopPropagation();
                             onResetRoute();
                         }}
-                        title="Remove all bends and route the line automatically"
+                        title="Remove all bends and restore the default route"
                     >
                         <RotateCcw className="!size-3.5" />
                         Reset route

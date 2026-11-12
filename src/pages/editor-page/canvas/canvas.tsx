@@ -42,6 +42,7 @@ import { RelationshipEdge } from './relationship-edge/relationship-edge';
 import { useChartDB } from '@/hooks/use-chartdb';
 import {
     LEFT_HANDLE_ID_PREFIX,
+    RIGHT_HANDLE_ID_PREFIX,
     TARGET_ID_PREFIX,
 } from './table-node/table-node-field';
 import { Toolbar } from './toolbar/toolbar';
@@ -280,7 +281,8 @@ export interface CanvasProps {
 }
 
 export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
-    const { getEdge, getInternalNode, getNode } = useReactFlow();
+    const { getEdge, getInternalNode, getNode, screenToFlowPosition } =
+        useReactFlow();
     const updateNodeInternals = useUpdateNodeInternals();
     const [selectedTableIds, setSelectedTableIds] = useState<string[]>([]);
     const [selectedRelationshipIds, setSelectedRelationshipIds] = useState<
@@ -850,6 +852,23 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
         checkNotesParentAreas();
     }, [nodes, updateNote]);
 
+    // Where the pointer was released when a connection is dragged, used to
+    // find the side of the target table the relationship comes in from
+    const connectPointerRef = useRef<{ x: number; y: number } | null>(null);
+    const onConnectStartHandler = useCallback(() => {
+        connectPointerRef.current = null;
+        window.addEventListener(
+            'pointerup',
+            (event) => {
+                connectPointerRef.current = {
+                    x: event.clientX,
+                    y: event.clientY,
+                };
+            },
+            { capture: true, once: true }
+        );
+    }, []);
+
     const onConnectHandler = useCallback(
         async (params: AddEdgeParams) => {
             if (
@@ -898,14 +917,46 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
                 return;
             }
 
+            // The side the line starts from is the side of the dragged handle,
+            // the side it comes in from is the half of the target table the
+            // pointer was released on
+            const sourceSide = params.sourceHandle?.startsWith?.(
+                RIGHT_HANDLE_ID_PREFIX
+            )
+                ? 'right'
+                : params.sourceHandle?.startsWith?.(LEFT_HANDLE_ID_PREFIX)
+                  ? 'left'
+                  : undefined;
+
+            const targetNode = getInternalNode(targetTableId);
+            const pointer = connectPointerRef.current;
+            const targetSide =
+                targetNode && pointer
+                    ? screenToFlowPosition(pointer).x <
+                      targetNode.internals.positionAbsolute.x +
+                          (targetNode.measured.width ?? 0) / 2
+                        ? 'left'
+                        : 'right'
+                    : undefined;
+
             createRelationship({
                 sourceTableId,
                 targetTableId,
                 sourceFieldId,
                 targetFieldId,
+                sourceSide,
+                targetSide,
             });
         },
-        [createRelationship, createDependency, getField, toast, databaseType]
+        [
+            createRelationship,
+            createDependency,
+            getField,
+            getInternalNode,
+            screenToFlowPosition,
+            toast,
+            databaseType,
+        ]
     );
 
     const onEdgesChangeHandler: OnEdgesChange<EdgeType> = useCallback(
@@ -1641,7 +1692,6 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
     );
 
     // Handle mouse move to update cursor position for floating edge
-    const { screenToFlowPosition } = useReactFlow();
     const rafIdRef = useRef<number>();
     const handleMouseMove = useCallback(
         (event: React.MouseEvent) => {
@@ -1802,6 +1852,7 @@ export const Canvas: React.FC<CanvasProps> = ({ initialTables }) => {
                     maxZoom={5}
                     minZoom={0.1}
                     onConnect={onConnectHandler}
+                    onConnectStart={onConnectStartHandler}
                     proOptions={{
                         hideAttribution: true,
                     }}
