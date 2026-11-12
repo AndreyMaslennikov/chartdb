@@ -12,6 +12,7 @@ import {
 } from '@/lib/domain/db-index';
 import type { DBCheckConstraint } from '@/lib/domain/db-check-constraint';
 import type { DBRelationship } from '@/lib/domain/db-relationship';
+import { getRelationshipUndoAttributes } from '@/lib/domain/db-relationship';
 import { useStorage } from '@/hooks/use-storage';
 import { useRedoUndoStack } from '@/hooks/use-redo-undo-stack';
 import type { Diagram } from '@/lib/domain/diagram';
@@ -1321,6 +1322,8 @@ export const ChartDBProvider: React.FC<
                 targetTableId,
                 sourceFieldId,
                 targetFieldId,
+                sourceSide,
+                targetSide,
             }) => {
                 const sourceTable = getTable(sourceTableId);
                 const sourceTableName = sourceTable?.name ?? '';
@@ -1346,6 +1349,8 @@ export const ChartDBProvider: React.FC<
                     sourceCardinality: 'one',
                     targetCardinality: 'one',
                     createdAt: Date.now(),
+                    ...(sourceSide ? { sourceSide } : {}),
+                    ...(targetSide ? { targetSide } : {}),
                 };
 
                 await addRelationship(relationship);
@@ -1446,7 +1451,10 @@ export const ChartDBProvider: React.FC<
                         redoData: { relationshipId: id, relationship },
                         undoData: {
                             relationshipId: id,
-                            relationship: prevRelationship,
+                            relationship: getRelationshipUndoAttributes(
+                                prevRelationship,
+                                relationship
+                            ),
                         },
                     });
                     resetRedoStack();

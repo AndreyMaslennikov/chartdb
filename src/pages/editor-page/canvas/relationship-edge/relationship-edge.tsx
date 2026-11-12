@@ -1,8 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Edge, EdgeProps } from '@xyflow/react';
-import { getSmoothStepPath, Position, useReactFlow } from '@xyflow/react';
-import type { DBRelationship, Cardinality } from '@/lib/domain/db-relationship';
+import { useReactFlow } from '@xyflow/react';
+import type {
+    DBRelationship,
+    Cardinality,
+    RelationshipSide,
+} from '@/lib/domain/db-relationship';
 import { RIGHT_HANDLE_ID_PREFIX } from '../table-node/table-node-field';
 import { useChartDB } from '@/hooks/use-chartdb';
 import { cn } from '@/lib/utils';
@@ -13,10 +17,22 @@ import { useCanvas } from '@/hooks/use-canvas';
 import { EditRelationshipPopover } from './edit-relationship-popover';
 import type { RoutePoint } from '@/lib/utils/route-utils';
 import {
-    buildRoutePoints,
+    addBendsAt,
+    buildRoute,
+    clampVerticalSegmentX,
+    dedupePoints,
+    findLongestSegment,
+    findNearestSegment,
+    fitAttachedSegment,
+    getDefaultRoute,
     getRouteMidpoint,
-    insertWaypoint,
+    isSegmentMovable,
+    isSegmentVertical,
+    moveSegment,
+    parseRoute,
     pointsToRoundedPath,
+    removeSegment,
+    snapBends,
 } from '@/lib/utils/route-utils';
 import { EllipsisIcon, MessageCircleMore } from 'lucide-react';
 import {
@@ -64,38 +80,23 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
             const relationship = data?.relationship;
             const isLogical = !!relationship?.isLogical;
 
-            // Manual route. While a waypoint is
-            // dragged the local copy is used, the result is saved on release.
-            const savedWaypoints = useMemo(
-                () => relationship?.waypoints ?? [],
+            // Manual route (a list of bends, see route-utils). While a segment
+            // is dragged the local copy is used, the result is saved on release.
+            const savedBends = useMemo(
+                () => parseRoute(relationship?.waypoints),
                 [relationship?.waypoints]
             );
-            const [dragWaypoints, setDragWaypoints] = useState<
-                RoutePoint[] | null
-            >(null);
-            const waypoints = dragWaypoints ?? savedWaypoints;
+            const [dragBends, setDragBends] = useState<RoutePoint[] | null>(
+                null
+            );
 
             useEffect(() => {
-                setDragWaypoints(null);
+                setDragBends(null);
             }, [relationship?.waypoints]);
 
             const isPopoverOpen = useMemo(
                 () => editRelationshipPopover?.relationshipId === id,
                 [editRelationshipPopover, id]
-            );
-
-            const handleEdgeClick = useCallback(
-                (e: React.MouseEvent) => {
-                    if (e.detail === 2) {
-                        // Double click - open popover
-                        openRelationshipPopover({
-                            relationshipId: id,
-                            position: { x: e.clientX, y: e.clientY },
-                        });
-                    }
-                    // Single click just selects the edge, doesn't open popover
-                },
-                [openRelationshipPopover, id]
             );
 
             const handleContextMenu = useCallback(
@@ -167,6 +168,8 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
                             targetTableId: relationship.sourceTableId,
                             sourceFieldId: relationship.targetFieldId,
                             targetFieldId: relationship.sourceFieldId,
+                            sourceSide: relationship.targetSide ?? null,
+                            targetSide: relationship.sourceSide ?? null,
                             sourceCardinality: relationship.targetCardinality,
                             targetCardinality: relationship.sourceCardinality,
                         },
@@ -193,6 +196,8 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
                             targetTableId: relationship.sourceTableId,
                             sourceFieldId: relationship.targetFieldId,
                             targetFieldId: relationship.sourceFieldId,
+                            sourceSide: relationship.targetSide ?? null,
+                            targetSide: relationship.sourceSide ?? null,
                         },
                         { updateHistory: true }
                     );
@@ -229,6 +234,8 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
                                 targetTableId: relationship.sourceTableId,
                                 sourceFieldId: relationship.targetFieldId,
                                 targetFieldId: relationship.sourceFieldId,
+                                sourceSide: relationship.targetSide ?? null,
+                                targetSide: relationship.sourceSide ?? null,
                                 // Set one:many (many on target)
                                 sourceCardinality: 'one',
                                 targetCardinality: 'many',
@@ -301,37 +308,58 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
             const targetLeftX = targetX - 1;
             const targetRightX = targetX + targetWidth + 10;
 
-            const { sourceSide, targetSide } = useMemo(() => {
-                const distances = {
-                    leftToLeft: Math.abs(sourceLeftX - targetLeftX),
-                    leftToRight: Math.abs(sourceLeftX - targetRightX),
-                    rightToLeft: Math.abs(sourceRightX - targetLeftX),
-                    rightToRight: Math.abs(sourceRightX - targetRightX),
-                };
+            const { sourceSide: autoSourceSide, targetSide: autoTargetSide } =
+                useMemo(() => {
+                    const distances = {
+                        leftToLeft: Math.abs(sourceLeftX - targetLeftX),
+                        leftToRight: Math.abs(sourceLeftX - targetRightX),
+                        rightToLeft: Math.abs(sourceRightX - targetLeftX),
+                        rightToRight: Math.abs(sourceRightX - targetRightX),
+                    };
 
-                const minDistance = Math.min(
-                    distances.leftToLeft,
-                    distances.leftToRight,
-                    distances.rightToLeft,
-                    distances.rightToRight
-                );
+                    const minDistance = Math.min(
+                        distances.leftToLeft,
+                        distances.leftToRight,
+                        distances.rightToLeft,
+                        distances.rightToRight
+                    );
 
-                const minDistanceKey = Object.keys(distances).find(
-                    (key) =>
-                        distances[key as keyof typeof distances] === minDistance
-                ) as keyof typeof distances;
+                    const minDistanceKey = Object.keys(distances).find(
+                        (key) =>
+                            distances[key as keyof typeof distances] ===
+                            minDistance
+                    ) as keyof typeof distances;
 
-                switch (minDistanceKey) {
-                    case 'leftToRight':
-                        return { sourceSide: 'left', targetSide: 'right' };
-                    case 'rightToLeft':
-                        return { sourceSide: 'right', targetSide: 'left' };
-                    case 'rightToRight':
-                        return { sourceSide: 'right', targetSide: 'right' };
-                    default:
-                        return { sourceSide: 'left', targetSide: 'left' };
-                }
-            }, [sourceLeftX, sourceRightX, targetLeftX, targetRightX]);
+                    switch (minDistanceKey) {
+                        case 'leftToRight':
+                            return { sourceSide: 'left', targetSide: 'right' };
+                        case 'rightToLeft':
+                            return { sourceSide: 'right', targetSide: 'left' };
+                        case 'rightToRight':
+                            return { sourceSide: 'right', targetSide: 'right' };
+                        default:
+                            return { sourceSide: 'left', targetSide: 'left' };
+                    }
+                }, [sourceLeftX, sourceRightX, targetLeftX, targetRightX]);
+
+            // The side can be chosen manually (saved on the relationship, or
+            // local while the end handle is dragged), otherwise it is automatic
+            const [dragSides, setDragSides] = useState<{
+                source?: RelationshipSide;
+                target?: RelationshipSide;
+            }>({});
+            useEffect(() => {
+                setDragSides({});
+            }, [relationship?.sourceSide, relationship?.targetSide]);
+
+            const sourceSide: RelationshipSide =
+                dragSides.source ??
+                relationship?.sourceSide ??
+                (autoSourceSide as RelationshipSide);
+            const targetSide: RelationshipSide =
+                dragSides.target ??
+                relationship?.targetSide ??
+                (autoTargetSide as RelationshipSide);
 
             // Edge endpoints (same ones the automatic route uses)
             const routeStart: RoutePoint = useMemo(
@@ -353,67 +381,102 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
                 [targetSide, targetLeftX, targetRightX, targetY]
             );
 
-            const routePoints = useMemo(
+            // Distance the line leaves the tables by when the sides don't face
+            // each other, grows for parallel relationships between the tables
+            const segmentOffset =
+                (edgeNumber + 1 + (showCardinality && !isLogical ? 1.5 : 0)) *
+                14;
+
+            const bends = useMemo(
                 () =>
-                    waypoints.length > 0
-                        ? buildRoutePoints(routeStart, waypoints, routeEnd)
-                        : null,
-                [waypoints, routeStart, routeEnd]
+                    dragBends ??
+                    savedBends ??
+                    getDefaultRoute({
+                        start: routeStart,
+                        end: routeEnd,
+                        startSide: sourceSide,
+                        endSide: targetSide,
+                        offset: segmentOffset,
+                    }),
+                [
+                    dragBends,
+                    savedBends,
+                    routeStart,
+                    routeEnd,
+                    sourceSide,
+                    targetSide,
+                    segmentOffset,
+                ]
             );
 
-            const edgePath = useMemo(() => {
-                // Round values to prevent tiny changes from triggering recalculation
-                if (routePoints) {
-                    return pointsToRoundedPath(routePoints, 14);
+            // Segment i goes from fullRoute[i] to fullRoute[i + 1]
+            const fullRoute = useMemo(
+                () => buildRoute(routeStart, routeEnd, bends),
+                [routeStart, routeEnd, bends]
+            );
+            const routePoints = useMemo(
+                () => dedupePoints(fullRoute),
+                [fullRoute]
+            );
+
+            // Alt/Option over a removable segment: show what will be removed
+            const [hoverSegment, setHoverSegment] = useState<number | null>(
+                null
+            );
+            const [altPressed, setAltPressed] = useState(false);
+            const isHoveringSegment = hoverSegment !== null;
+
+            useEffect(() => {
+                if (!isHoveringSegment) {
+                    setAltPressed(false);
+                    return;
                 }
 
-                const roundedSourceX = Math.round(
-                    sourceSide === 'left' ? sourceLeftX : sourceRightX
-                );
-                const roundedTargetX = Math.round(
-                    targetSide === 'left' ? targetLeftX : targetRightX
-                );
-                const roundedSourceY = Math.round(sourceY);
-                const roundedTargetY = Math.round(targetY);
+                const onKey = (event: KeyboardEvent) =>
+                    setAltPressed(event.altKey);
+                window.addEventListener('keydown', onKey);
+                window.addEventListener('keyup', onKey);
+                return () => {
+                    window.removeEventListener('keydown', onKey);
+                    window.removeEventListener('keyup', onKey);
+                };
+            }, [isHoveringSegment]);
 
-                const [path] = getSmoothStepPath({
-                    sourceX: roundedSourceX,
-                    sourceY: roundedSourceY,
-                    targetX: roundedTargetX,
-                    targetY: roundedTargetY,
-                    borderRadius: 14,
-                    sourcePosition:
-                        sourceSide === 'left' ? Position.Left : Position.Right,
-                    targetPosition:
-                        targetSide === 'left' ? Position.Left : Position.Right,
-                    offset:
-                        (edgeNumber +
-                            1 +
-                            (showCardinality && !isLogical ? 1.5 : 0)) *
-                        14,
-                });
-                return path;
-            }, [
-                sourceLeftX,
-                sourceRightX,
-                targetLeftX,
-                targetRightX,
-                sourceY,
-                targetY,
-                sourceSide,
-                targetSide,
-                edgeNumber,
-                showCardinality,
-                isLogical,
-                routePoints,
-            ]);
+            // segment indexes change when bends are added or removed
+            useEffect(() => {
+                setHoverSegment(null);
+            }, [bends.length]);
+
+            // the cross is drawn in the middle of the segment to be removed
+            const removeMarker = useMemo(() => {
+                if (
+                    hoverSegment === null ||
+                    !altPressed ||
+                    bends.length < 4 ||
+                    !isSegmentMovable(hoverSegment, bends.length)
+                ) {
+                    return null;
+                }
+
+                const from = fullRoute[hoverSegment];
+                const to = fullRoute[hoverSegment + 1];
+                return {
+                    x: Math.round((from.x + to.x) / 2),
+                    y: Math.round((from.y + to.y) / 2),
+                };
+            }, [hoverSegment, altPressed, bends.length, fullRoute]);
+
+            const edgePath = useMemo(
+                () => pointsToRoundedPath(routePoints, 14),
+                [routePoints]
+            );
 
             const sourceMarker = useMemo(
                 () =>
                     getCardinalityMarkerId({
                         cardinality: relationship?.sourceCardinality ?? 'one',
                         selected: selected ?? false,
-                        side: sourceSide as 'left' | 'right',
+                        side: sourceSide,
                     }),
                 [relationship?.sourceCardinality, selected, sourceSide]
             );
@@ -422,7 +485,7 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
                     getCardinalityMarkerId({
                         cardinality: relationship?.targetCardinality ?? 'one',
                         selected: selected ?? false,
-                        side: targetSide as 'left' | 'right',
+                        side: targetSide,
                     }),
                 [relationship?.targetCardinality, selected, targetSide]
             );
@@ -448,85 +511,116 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
             );
 
             // Calculate the midpoint of the edge for the indicator
-            const edgeMidpoint = useMemo(() => {
-                if (routePoints) {
-                    return getRouteMidpoint(routePoints);
-                }
+            const edgeMidpoint = useMemo(
+                () => getRouteMidpoint(routePoints),
+                [routePoints]
+            );
 
-                const sourceXPos =
-                    sourceSide === 'left' ? sourceLeftX : sourceRightX;
-                const targetXPos =
-                    targetSide === 'left' ? targetLeftX : targetRightX;
-                return {
-                    x: (sourceXPos + targetXPos) / 2,
-                    y: (sourceY + targetY) / 2,
-                };
-            }, [
-                sourceSide,
-                targetSide,
-                sourceLeftX,
-                sourceRightX,
-                targetLeftX,
-                targetRightX,
-                sourceY,
-                targetY,
-                routePoints,
-            ]);
-
-            const saveWaypoints = useCallback(
-                (newWaypoints: RoutePoint[]) =>
+            const saveBends = useCallback(
+                (newBends: RoutePoint[] | null) =>
                     updateRelationship(
                         id,
                         {
                             waypoints:
-                                newWaypoints.length > 0 ? newWaypoints : null,
+                                newBends && newBends.length > 0
+                                    ? snapBends(routeStart, routeEnd, newBends)
+                                    : null,
                         },
                         { updateHistory: true }
                     ),
-                [id, updateRelationship]
+                [id, updateRelationship, routeStart, routeEnd]
+            );
+
+            const handleResetRoute = useCallback(() => {
+                updateRelationship(
+                    id,
+                    { waypoints: null, sourceSide: null, targetSide: null },
+                    { updateHistory: true }
+                );
+                closeRelationshipPopover();
+            }, [id, updateRelationship, closeRelationshipPopover]);
+
+            // Double click on the line adds two bends at the clicked point
+            const handleEdgeDoubleClick = useCallback(
+                (e: React.MouseEvent) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+
+                    const point = screenToFlowPosition({
+                        x: e.clientX,
+                        y: e.clientY,
+                    });
+                    const segmentIndex = findNearestSegment(fullRoute, point);
+                    saveBends(
+                        addBendsAt(
+                            routeStart,
+                            routeEnd,
+                            bends,
+                            segmentIndex,
+                            point
+                        )
+                    );
+                },
+                [
+                    screenToFlowPosition,
+                    fullRoute,
+                    saveBends,
+                    routeStart,
+                    routeEnd,
+                    bends,
+                ]
             );
 
             const handleAddBend = useCallback(() => {
-                saveWaypoints(insertWaypoint(routeStart, waypoints, routeEnd));
+                const { index, middle } = findLongestSegment(fullRoute);
+                saveBends(
+                    addBendsAt(routeStart, routeEnd, bends, index, middle)
+                );
                 closeRelationshipPopover();
             }, [
-                saveWaypoints,
+                fullRoute,
+                saveBends,
                 routeStart,
                 routeEnd,
-                waypoints,
+                bends,
                 closeRelationshipPopover,
             ]);
 
-            const handleResetRoute = useCallback(() => {
-                saveWaypoints([]);
-                closeRelationshipPopover();
-            }, [saveWaypoints, closeRelationshipPopover]);
-
-            const handleWaypointPointerDown = useCallback(
-                (index: number, e: React.PointerEvent<SVGCircleElement>) => {
+            // Dragging an end of the line to the other half of its table
+            // changes the side the line is attached to
+            const handleEndPointerDown = useCallback(
+                (
+                    end: 'source' | 'target',
+                    e: React.PointerEvent<SVGCircleElement>
+                ) => {
+                    if (e.button !== 0) return;
                     e.stopPropagation();
-                    e.preventDefault();
+
+                    const node = end === 'source' ? sourceNode : targetNode;
+                    if (!node) return;
 
                     const handle = e.currentTarget;
                     const pointerId = e.pointerId;
                     handle.setPointerCapture(pointerId);
 
-                    let latest = waypoints;
+                    const centerX =
+                        node.internals.positionAbsolute.x +
+                        (node.measured.width ?? 0) / 2;
+                    const initialSide =
+                        end === 'source' ? sourceSide : targetSide;
+                    let latest = initialSide;
 
                     const onMove = (event: PointerEvent) => {
                         const point = screenToFlowPosition({
                             x: event.clientX,
                             y: event.clientY,
                         });
-                        latest = waypoints.map((waypoint, i) =>
-                            i === index
-                                ? {
-                                      x: Math.round(point.x),
-                                      y: Math.round(point.y),
-                                  }
-                                : waypoint
-                        );
-                        setDragWaypoints(latest);
+                        const side: RelationshipSide =
+                            point.x < centerX ? 'left' : 'right';
+                        if (side === latest) return;
+
+                        latest = side;
+                        setDragSides((prev) => ({ ...prev, [end]: side }));
                     };
 
                     const onUp = () => {
@@ -534,25 +628,133 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
                         handle.removeEventListener('pointerup', onUp);
                         handle.releasePointerCapture(pointerId);
 
-                        if (latest === waypoints) {
-                            setDragWaypoints(null);
+                        if (latest === initialSide) {
                             return;
                         }
-                        saveWaypoints(latest);
+
+                        // keep the bends, only move the segment attached to
+                        // this table when it is now on the wrong side of it
+                        const edgeX = Math.round(
+                            end === 'source'
+                                ? latest === 'left'
+                                    ? sourceLeftX
+                                    : sourceRightX
+                                : latest === 'left'
+                                  ? targetLeftX
+                                  : targetRightX
+                        );
+                        const fitted = savedBends
+                            ? fitAttachedSegment(
+                                  savedBends,
+                                  end === 'source' ? 'start' : 'end',
+                                  edgeX,
+                                  latest,
+                                  segmentOffset
+                              )
+                            : null;
+
+                        updateRelationship(
+                            id,
+                            {
+                                [end === 'source'
+                                    ? 'sourceSide'
+                                    : 'targetSide']: latest,
+                                ...(fitted && fitted !== savedBends
+                                    ? { waypoints: fitted }
+                                    : {}),
+                            },
+                            { updateHistory: true }
+                        );
                     };
 
                     handle.addEventListener('pointermove', onMove);
                     handle.addEventListener('pointerup', onUp);
                 },
-                [waypoints, screenToFlowPosition, saveWaypoints]
+                [
+                    sourceNode,
+                    targetNode,
+                    sourceSide,
+                    targetSide,
+                    screenToFlowPosition,
+                    sourceLeftX,
+                    sourceRightX,
+                    targetLeftX,
+                    targetRightX,
+                    savedBends,
+                    segmentOffset,
+                    id,
+                    updateRelationship,
+                ]
             );
 
-            const handleWaypointRemove = useCallback(
-                (index: number, e: React.MouseEvent) => {
+            const handleSegmentPointerDown = useCallback(
+                (
+                    segmentIndex: number,
+                    e: React.PointerEvent<SVGLineElement>
+                ) => {
+                    if (e.button !== 0) return;
                     e.stopPropagation();
-                    saveWaypoints(waypoints.filter((_, i) => i !== index));
+
+                    // Alt/Option + click removes the segment with its two bends
+                    if (e.altKey) {
+                        setHoverSegment(null);
+                        saveBends(removeSegment(bends, segmentIndex));
+                        return;
+                    }
+
+                    const handle = e.currentTarget;
+                    const pointerId = e.pointerId;
+                    handle.setPointerCapture(pointerId);
+
+                    const vertical = isSegmentVertical(segmentIndex);
+                    const startSide = sourceSide;
+                    const endSide = targetSide;
+                    let latest: RoutePoint[] | null = null;
+
+                    const onMove = (event: PointerEvent) => {
+                        const point = screenToFlowPosition({
+                            x: event.clientX,
+                            y: event.clientY,
+                        });
+                        const value = vertical
+                            ? clampVerticalSegmentX(Math.round(point.x), {
+                                  attachedToStart: segmentIndex === 1,
+                                  attachedToEnd:
+                                      segmentIndex === bends.length - 1,
+                                  startX: routeStart.x,
+                                  endX: routeEnd.x,
+                                  startSide,
+                                  endSide,
+                              })
+                            : Math.round(point.y);
+
+                        latest = moveSegment(bends, segmentIndex, value);
+                        setDragBends(latest);
+                    };
+
+                    const onUp = () => {
+                        handle.removeEventListener('pointermove', onMove);
+                        handle.removeEventListener('pointerup', onUp);
+                        handle.releasePointerCapture(pointerId);
+
+                        if (!latest) {
+                            return;
+                        }
+                        saveBends(latest);
+                    };
+
+                    handle.addEventListener('pointermove', onMove);
+                    handle.addEventListener('pointerup', onUp);
                 },
-                [waypoints, saveWaypoints]
+                [
+                    bends,
+                    sourceSide,
+                    targetSide,
+                    routeStart,
+                    routeEnd,
+                    screenToFlowPosition,
+                    saveBends,
+                ]
             );
 
             return (
@@ -578,7 +780,7 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
                                     isDiffRelationshipRemoved,
                             },
                         ])}
-                        onClick={handleEdgeClick}
+                        onDoubleClick={handleEdgeDoubleClick}
                         onContextMenu={handleContextMenu}
                     />
                     <path
@@ -588,30 +790,104 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
                         strokeWidth={20}
                         // eslint-disable-next-line tailwindcss/no-custom-classname
                         className="react-flow__edge-interaction"
-                        onClick={handleEdgeClick}
+                        onDoubleClick={handleEdgeDoubleClick}
                         onContextMenu={handleContextMenu}
                     />
-                    {selected &&
-                        waypoints.map((waypoint, index) => (
-                            <circle
+                    {fullRoute.slice(0, -1).map((from, index) => {
+                        const to = fullRoute[index + 1];
+                        if (
+                            !isSegmentMovable(index, bends.length) ||
+                            (from.x === to.x && from.y === to.y)
+                        ) {
+                            return null;
+                        }
+
+                        return (
+                            <line
                                 key={index}
-                                cx={waypoint.x}
-                                cy={waypoint.y}
-                                r={8}
-                                strokeWidth={3}
+                                x1={from.x}
+                                y1={from.y}
+                                x2={to.x}
+                                y2={to.y}
+                                stroke="transparent"
+                                strokeWidth={14}
                                 // eslint-disable-next-line tailwindcss/no-custom-classname
-                                className="nodrag nopan cursor-move fill-pink-600 stroke-white"
-                                style={{ pointerEvents: 'all' }}
+                                className="nodrag nopan"
+                                style={{
+                                    pointerEvents: 'stroke',
+                                    cursor:
+                                        removeMarker && hoverSegment === index
+                                            ? 'pointer'
+                                            : isSegmentVertical(index)
+                                              ? 'ew-resize'
+                                              : 'ns-resize',
+                                }}
                                 onPointerDown={(e) =>
-                                    handleWaypointPointerDown(index, e)
+                                    handleSegmentPointerDown(index, e)
                                 }
-                                onDoubleClick={(e) =>
-                                    handleWaypointRemove(index, e)
+                                onPointerEnter={(e) => {
+                                    setAltPressed(e.altKey);
+                                    setHoverSegment(index);
+                                }}
+                                onPointerMove={(e) => {
+                                    if (e.altKey !== altPressed) {
+                                        setAltPressed(e.altKey);
+                                    }
+                                }}
+                                onPointerLeave={() => setHoverSegment(null)}
+                                onDoubleClick={handleEdgeDoubleClick}
+                                onContextMenu={handleContextMenu}
+                            >
+                                <title>
+                                    {bends.length >= 4
+                                        ? 'Drag to move, double-click to add bends, Alt+click to remove'
+                                        : 'Drag to move, double-click to add bends'}
+                                </title>
+                            </line>
+                        );
+                    })}
+                    {removeMarker && (
+                        <path
+                            d={`M ${removeMarker.x - 6} ${removeMarker.y - 6} L ${removeMarker.x + 6} ${removeMarker.y + 6} M ${removeMarker.x + 6} ${removeMarker.y - 6} L ${removeMarker.x - 6} ${removeMarker.y + 6}`}
+                            stroke="#db2777"
+                            strokeWidth={3}
+                            strokeLinecap="round"
+                            fill="none"
+                            // a highlighted edge is `animated`: its paths get a
+                            // moving dashed stroke from the react flow styles
+                            style={{
+                                pointerEvents: 'none',
+                                strokeDasharray: 'none',
+                                animation: 'none',
+                            }}
+                        />
+                    )}
+                    {selected &&
+                        (
+                            [
+                                ['source', routeStart],
+                                ['target', routeEnd],
+                            ] as const
+                        ).map(([end, point]) => (
+                            <circle
+                                key={end}
+                                cx={point.x}
+                                cy={point.y}
+                                r={6}
+                                strokeWidth={2}
+                                // eslint-disable-next-line tailwindcss/no-custom-classname
+                                className="nodrag nopan fill-pink-600 stroke-white"
+                                style={{
+                                    pointerEvents: 'all',
+                                    cursor: 'grab',
+                                }}
+                                onPointerDown={(e) =>
+                                    handleEndPointerDown(end, e)
                                 }
                             >
                                 <title>
-                                    Drag to move the bend, double-click to
-                                    remove it
+                                    Drag to the other half of the table to
+                                    change the side
                                 </title>
                             </circle>
                         ))}
@@ -682,7 +958,11 @@ export const RelationshipEdge: React.FC<EdgeProps<RelationshipEdgeType>> =
                                 isLogical={isLogical}
                                 comments={relationship.comments ?? ''}
                                 onToggleLogical={handleToggleLogical}
-                                hasWaypoints={waypoints.length > 0}
+                                hasWaypoints={
+                                    !!relationship.waypoints?.length ||
+                                    !!relationship.sourceSide ||
+                                    !!relationship.targetSide
+                                }
                                 onAddBend={handleAddBend}
                                 onResetRoute={handleResetRoute}
                                 onCommentsChange={handleCommentsChange}

@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+export type RelationshipSide = 'left' | 'right';
+
 export interface DBRelationship {
     id: string;
     name: string;
@@ -18,6 +20,9 @@ export interface DBRelationship {
     comments?: string | null;
     // Manual route of the line (absolute canvas coordinates)
     waypoints?: { x: number; y: number }[] | null;
+    // Side of the table the line is attached to. Chosen automatically when empty
+    sourceSide?: RelationshipSide | null;
+    targetSide?: RelationshipSide | null;
 }
 
 export const dbRelationshipSchema: z.ZodType<DBRelationship> = z.object({
@@ -36,6 +41,14 @@ export const dbRelationshipSchema: z.ZodType<DBRelationship> = z.object({
     comments: z.string().or(z.null()).optional(),
     waypoints: z
         .array(z.object({ x: z.number(), y: z.number() }))
+        .or(z.null())
+        .optional(),
+    sourceSide: z
+        .union([z.literal('left'), z.literal('right')])
+        .or(z.null())
+        .optional(),
+    targetSide: z
+        .union([z.literal('left'), z.literal('right')])
         .or(z.null())
         .optional(),
 });
@@ -104,4 +117,25 @@ export const withoutLogicalRelationships = <
             (relationship) => !isLogicalRelationship(relationship)
         ),
     };
+};
+
+/**
+ * Attributes that restore `previous` after `changes` were applied.
+ * A change that sets a field the previous relationship did not have at all
+ * (for example the first `waypoints`) has to be undone by resetting the field,
+ * merging the previous relationship alone would leave the new value in place.
+ */
+export const getRelationshipUndoAttributes = (
+    previous: DBRelationship,
+    changes: Partial<DBRelationship>
+): DBRelationship => {
+    const resets = Object.fromEntries(
+        Object.keys(changes)
+            .filter(
+                (key) => previous[key as keyof DBRelationship] === undefined
+            )
+            .map((key) => [key, null])
+    );
+
+    return { ...previous, ...resets };
 };
